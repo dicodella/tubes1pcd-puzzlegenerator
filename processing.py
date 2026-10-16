@@ -32,10 +32,6 @@ def get_grid_boundaries(width, height, m):
 # ==================================================
 
 def create_frame(image, m, jigsaw=False):
-    """
-    Sel terluar menampilkan gambar asli.
-    Area tengah dikosongkan untuk pieces.
-    """
     image = image.convert("RGB")
     original = np.array(image)
 
@@ -66,7 +62,6 @@ def create_frame(image, m, jigsaw=False):
                     x[col]:x[col + 1]
                 ]
 
-    # Grid lurus hanya untuk mode kotak.
     if not jigsaw:
         for xi in x:
             cv2.line(
@@ -94,17 +89,6 @@ def create_frame(image, m, jigsaw=False):
 # ==================================================
 
 def make_mask(width, height, tabs, radius):
-    """
-    Membuat bentuk piece dengan pasak dan celah.
-
-    tabs:
-        +1 = pasak keluar
-        -1 = celah masuk
-         0 = sisi lurus
-
-    Bentuk dibuat dengan titik-titik kurva agar sisi
-    antarpotongan bisa saling melengkapi.
-    """
     mask = Image.new("L", (width, height), 0)
 
     pad = radius
@@ -120,7 +104,6 @@ def make_mask(width, height, tabs, radius):
         for i in range(steps + 1):
             t = i / steps
 
-            # Pasak/celah hanya di bagian tengah sisi.
             if 0.30 <= t <= 0.70 and tab != 0:
                 u = (t - 0.30) / 0.40
                 offset = (
@@ -147,7 +130,6 @@ def make_mask(width, height, tabs, radius):
 
         return points
 
-    # Keliling piece: atas -> kanan -> bawah -> kiri.
     points = []
     points += make_side(
         (x0, y0), (x1, y0), "top", tabs["top"]
@@ -173,12 +155,6 @@ def make_mask(width, height, tabs, radius):
 # ==================================================
 
 def create_pieces(image, m, jigsaw=False):
-    """
-    Mengambil hanya sel bagian dalam.
-
-    Untuk mode jigsaw, setiap batas bersama memiliki
-    pasak dan celah yang saling melengkapi.
-    """
     width, height = image.size
     x, y = get_grid_boundaries(width, height, m)
 
@@ -214,8 +190,6 @@ def create_pieces(image, m, jigsaw=False):
                 paste_x, paste_y = x1, y1
 
             else:
-                # Pasak hanya pada batas antarpieces.
-                # Sisi yang menyentuh frame tetap lurus.
                 tabs = {
                     "top": (
                         -horizontal_edges[(row - 1, col)]
@@ -236,8 +210,7 @@ def create_pieces(image, m, jigsaw=False):
                 }
 
                 pad = radius
-
-                # Crop mencakup area tambahan untuk pasak.
+                
                 crop = image.crop((
                     x1 - pad,
                     y1 - pad,
@@ -277,9 +250,7 @@ def create_pieces(image, m, jigsaw=False):
 
 def rotate_piece(piece):
     angle = random.choice([90, 180, 270])
-
-    # Ukuran kanvas dipertahankan agar posisi preview
-    # tidak berubah ketika orientasi piece diputar.
+    
     return piece.rotate(
         angle,
         resample=Image.Resampling.BICUBIC,
@@ -328,7 +299,6 @@ def process_pieces(
         if rotate:
             piece = rotate_piece(piece)
 
-        # Geometri jigsaw dibuat di create_pieces().
         results.append({
             **item,
             "image": piece
@@ -358,18 +328,14 @@ def create_puzzle_preview(image, frame, pieces, m):
         px = item["paste_x"]
         py = item["paste_y"]
 
-        # Tempel gambar piece.
         preview.alpha_composite(piece, (px, py))
 
         if is_jigsaw:
-            # Ambil alpha mask bentuk jigsaw.
             alpha = piece.getchannel("A")
 
-            # Ekstrak tepi luar bentuk.
             eroded = alpha.filter(ImageFilter.MinFilter(3))
             edge = ImageChops.subtract(alpha, eroded)
 
-            # Tebalkan garis hitam.
             edge = edge.filter(
                 ImageFilter.MaxFilter(3)
             )
