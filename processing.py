@@ -1,4 +1,3 @@
-
 from PIL import Image, ImageOps, ImageDraw, ImageEnhance
 import numpy as np
 import cv2
@@ -251,11 +250,9 @@ def create_pieces(image, m, jigsaw=False):
 def rotate_piece(piece):
     angle = random.choice([90, 180, 270])
     
-    return piece.rotate(
-        angle,
-        resample=Image.Resampling.BICUBIC,
-        expand=False
-    )
+    # expand=True => untuk kelipatan 90 derajat PIL memakai transpose (lossless)
+    # dan ukuran potongan non-persegi ikut berputar (w x h -> h x w).
+    return piece.rotate(angle, expand=True)
 
 
 def augment_piece(piece):
