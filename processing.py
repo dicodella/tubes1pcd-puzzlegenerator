@@ -1,15 +1,13 @@
-from PIL import Image, ImageOps, ImageDraw, ImageEnhance
+from PIL import Image, ImageOps
 import numpy as np
 import cv2
-import random
 import io
 import zipfile
 
 
 # ==================================================
-# 1. MEMBACA GAMBAR
+# 1. MEMBACA & STANDARISASI CITRA
 # ==================================================
-
 def load_image(uploaded_file):
     image = Image.open(uploaded_file)
     image = ImageOps.exif_transpose(image)
@@ -17,392 +15,119 @@ def load_image(uploaded_file):
 
 
 # ==================================================
-# 2. MEMBUAT BATAS GRID
+# 2. MENGHITUNG KOORDINAT BATAS GRID (M x M)
 # ==================================================
-
-def get_grid_boundaries(width, height, m):
-    x = [round(i * width / m) for i in range(m + 1)]
-    y = [round(i * height / m) for i in range(m + 1)]
-    return x, y
+def get_grid_boundaries(width, height, grid_size):
+    x_points = [round(i * width / grid_size) for i in range(grid_size + 1)]
+    y_points = [round(i * height / grid_size) for i in range(grid_size + 1)]
+    return x_points, y_points
 
 
 # ==================================================
-# 3. MEMBUAT FRAME
+# 3. MEMBUAT BINGKAI (FRAME)
 # ==================================================
+def create_frame(image, grid_size):
+    original_array = np.array(image.convert("RGB"))
+    height, width = original_array.shape[:2]
+    x_points, y_points = get_grid_boundaries(width, height, grid_size)
 
-def create_frame(image, m, jigsaw=False):
-    image = image.convert("RGB")
-    original = np.array(image)
+    # Buat kanvas kosong berwarna krem terang (RGB: 250, 248, 240)
+    frame_array = np.full((height, width, 3), (250, 248, 240), dtype=np.uint8)
 
-    height, width = original.shape[:2]
-    x, y = get_grid_boundaries(width, height, m)
-
-    frame = np.full(
-        (height, width, 3),
-        (250, 248, 240),
-        dtype=np.uint8
-    )
-
-    for row in range(m):
-        for col in range(m):
-            outer = (
-                row == 0
-                or row == m - 1
-                or col == 0
-                or col == m - 1
+    # Salin piksel citra asli HANYA pada sel terluar
+    for row in range(grid_size):
+        for col in range(grid_size):
+            is_outer_cell = (
+                row == 0 or
+                row == grid_size - 1 or
+                col == 0 or
+                col == grid_size - 1
             )
 
-            if outer:
-                frame[
-                    y[row]:y[row + 1],
-                    x[col]:x[col + 1]
-                ] = original[
-                    y[row]:y[row + 1],
-                    x[col]:x[col + 1]
-                ]
+            if is_outer_cell:
+                y_start, y_end = y_points[row], y_points[row + 1]
+                x_start, x_end = x_points[col], x_points[col + 1]
+                frame_array[y_start:y_end, x_start:x_end] = original_array[y_start:y_end, x_start:x_end]
 
-    if not jigsaw:
-        for xi in x:
-            cv2.line(
-                frame,
-                (xi, 0),
-                (xi, height - 1),
-                (225, 205, 155),
-                1
-            )
+    # Gambar garis bantu grid pada bingkai
+    for x_pos in x_points:
+        cv2.line(frame_array, (x_pos, 0), (x_pos, height - 1), (225, 205, 155), 1)
+    for y_pos in y_points:
+        cv2.line(frame_array, (0, y_pos), (width - 1, y_pos), (225, 205, 155), 1)
 
-        for yi in y:
-            cv2.line(
-                frame,
-                (0, yi),
-                (width - 1, yi),
-                (225, 205, 155),
-                1
-            )
-
-    return Image.fromarray(frame)
+    return Image.fromarray(frame_array)
 
 
 # ==================================================
-# 4. MEMBUAT MASKER JIGSAW
+# 4. MEMOTONG AREA DALAM MENJADI N PIECES (BERURUTAN)
 # ==================================================
-
-def make_mask(width, height, tabs, radius):
-    mask = Image.new("L", (width, height), 0)
-
-    pad = radius
-    x0 = pad
-    y0 = pad
-    x1 = width - pad
-    y1 = height - pad
-
-    def make_side(start, end, side, tab):
-        points = []
-        steps = 32
-
-        for i in range(steps + 1):
-            t = i / steps
-
-            if 0.30 <= t <= 0.70 and tab != 0:
-                u = (t - 0.30) / 0.40
-                offset = (
-                    radius
-                    * np.sin(np.pi * u)
-                    * tab
-                )
-            else:
-                offset = 0
-
-            px = start[0] + (end[0] - start[0]) * t
-            py = start[1] + (end[1] - start[1]) * t
-
-            if side == "top":
-                py -= offset
-            elif side == "right":
-                px += offset
-            elif side == "bottom":
-                py += offset
-            elif side == "left":
-                px -= offset
-
-            points.append((round(px), round(py)))
-
-        return points
-
-    points = []
-    points += make_side(
-        (x0, y0), (x1, y0), "top", tabs["top"]
-    )
-    points += make_side(
-        (x1, y0), (x1, y1), "right", tabs["right"]
-    )
-    points += make_side(
-        (x1, y1), (x0, y1), "bottom", tabs["bottom"]
-    )
-    points += make_side(
-        (x0, y1), (x0, y0), "left", tabs["left"]
-    )
-
-    draw = ImageDraw.Draw(mask)
-    draw.polygon(points, fill=255)
-
-    return mask
-
-
-# ==================================================
-# 5. MEMOTONG GAMBAR MENJADI PIECES
-# ==================================================
-
-def create_pieces(image, m, jigsaw=False):
-    width, height = image.size
-    x, y = get_grid_boundaries(width, height, m)
+def create_pieces(image, grid_size):
+    original_array = np.array(image.convert("RGB"))
+    height, width = original_array.shape[:2]
+    x_points, y_points = get_grid_boundaries(width, height, grid_size)
 
     pieces = []
 
-    cell_w = width / m
-    cell_h = height / m
-    radius = max(2, int(min(cell_w, cell_h) * 0.15))
+    # Potong bagian dalam grid secara berurutan dari kiri-atas ke kanan-bawah
+    for row in range(1, grid_size - 1):
+        for col in range(1, grid_size - 1):
+            x_start, x_end = x_points[col], x_points[col + 1]
+            y_start, y_end = y_points[row], y_points[row + 1]
 
-    # Pola batas horizontal dan vertikal.
-    horizontal_edges = {
-        (row, col): random.choice([-1, 1])
-        for row in range(m - 1)
-        for col in range(m)
-    }
-
-    vertical_edges = {
-        (row, col): random.choice([-1, 1])
-        for row in range(m)
-        for col in range(m - 1)
-    }
-
-    for row in range(1, m - 1):
-        for col in range(1, m - 1):
-            x1, x2 = x[col], x[col + 1]
-            y1, y2 = y[row], y[row + 1]
-
-            cell_width = x2 - x1
-            cell_height = y2 - y1
-
-            if not jigsaw:
-                piece = image.crop((x1, y1, x2, y2))
-                paste_x, paste_y = x1, y1
-
-            else:
-                tabs = {
-                    "top": (
-                        -horizontal_edges[(row - 1, col)]
-                        if row > 1 else 0
-                    ),
-                    "bottom": (
-                        horizontal_edges[(row, col)]
-                        if row < m - 2 else 0
-                    ),
-                    "left": (
-                        -vertical_edges[(row, col - 1)]
-                        if col > 1 else 0
-                    ),
-                    "right": (
-                        vertical_edges[(row, col)]
-                        if col < m - 2 else 0
-                    ),
-                }
-
-                pad = radius
-                
-                crop = image.crop((
-                    x1 - pad,
-                    y1 - pad,
-                    x2 + pad,
-                    y2 + pad
-                )).convert("RGBA")
-
-                mask = make_mask(
-                    cell_width + 2 * pad,
-                    cell_height + 2 * pad,
-                    tabs,
-                    radius
-                )
-
-                crop.putalpha(mask)
-
-                piece = crop
-                paste_x = x1 - pad
-                paste_y = y1 - pad
+            piece_array = original_array[y_start:y_end, x_start:x_end]
+            piece_image = Image.fromarray(piece_array)
 
             pieces.append({
                 "name": f"piece_{len(pieces) + 1:03d}.png",
-                "image": piece,
+                "image": piece_image,
                 "row": row,
                 "col": col,
-                "paste_x": paste_x,
-                "paste_y": paste_y,
-                "jigsaw": jigsaw
             })
 
     return pieces
 
 
 # ==================================================
-# 6. ROTASI DAN AUGMENTASI
+# 5. MEMBUAT VISUALISASI PREVIEW (BERURUTAN)
 # ==================================================
+def create_puzzle_preview(frame_image, pieces, grid_size):
+    preview_array = np.array(frame_image.convert("RGB"))
+    height, width = preview_array.shape[:2]
+    x_points, y_points = get_grid_boundaries(width, height, grid_size)
 
-def rotate_piece(piece):
-    angle = random.choice([90, 180, 270])
-    
-    # expand=True => untuk kelipatan 90 derajat PIL memakai transpose (lossless)
-    # dan ukuran potongan non-persegi ikut berputar (w x h -> h x w).
-    return piece.rotate(angle, expand=True)
-
-
-def augment_piece(piece):
-    piece = ImageEnhance.Brightness(piece).enhance(
-        random.uniform(0.85, 1.15)
-    )
-
-    piece = ImageEnhance.Contrast(piece).enhance(
-        random.uniform(0.85, 1.15)
-    )
-
-    if piece.mode == "RGBA":
-        rgb = piece.convert("RGB")
-        rgb = ImageEnhance.Color(rgb).enhance(
-            random.uniform(0.85, 1.15)
-        )
-        rgb.putalpha(piece.getchannel("A"))
-        piece = rgb
-    else:
-        piece = ImageEnhance.Color(piece).enhance(
-            random.uniform(0.85, 1.15)
-        )
-
-    return piece
-
-
-def process_pieces(
-    pieces,
-    rotate=False,
-    augment=False,
-    jigsaw=False
-):
-    results = []
-
+    # Tempelkan setiap potongan langsung ke koordinat (row, col) aslinya
     for item in pieces:
-        piece = item["image"].copy()
+        row = item["row"]
+        col = item["col"]
+        piece_array = np.array(item["image"])
 
-        if augment:
-            piece = augment_piece(piece)
+        y_start, y_end = y_points[row], y_points[row + 1]
+        x_start, x_end = x_points[col], x_points[col + 1]
 
-        if rotate:
-            piece = rotate_piece(piece)
+        preview_array[y_start:y_end, x_start:x_end] = piece_array
 
-        results.append({
-            **item,
-            "image": piece
-        })
+    # Gambar garis batas antar potongan agar terlihat jelas di preview
+    for x_pos in x_points:
+        cv2.line(preview_array, (x_pos, 0), (x_pos, height - 1), (40, 40, 40), 1)
+    for y_pos in y_points:
+        cv2.line(preview_array, (0, y_pos), (width - 1, y_pos), (40, 40, 40), 1)
 
-    return results
-
-
-# ==================================================
-# 7. MEMBUAT PREVIEW
-# ==================================================
-
-
-def create_puzzle_preview(image, frame, pieces, m):
-    from PIL import Image, ImageDraw, ImageFilter, ImageChops
-
-    width, height = image.size
-    preview = frame.convert("RGBA")
-
-    is_jigsaw = any(
-        item.get("jigsaw", False)
-        for item in pieces
-    )
-
-    for item in pieces:
-        piece = item["image"].convert("RGBA")
-        px = item["paste_x"]
-        py = item["paste_y"]
-
-        preview.alpha_composite(piece, (px, py))
-
-        if is_jigsaw:
-            alpha = piece.getchannel("A")
-
-            eroded = alpha.filter(ImageFilter.MinFilter(3))
-            edge = ImageChops.subtract(alpha, eroded)
-
-            edge = edge.filter(
-                ImageFilter.MaxFilter(3)
-            )
-
-            outline = Image.new(
-                "RGBA",
-                piece.size,
-                (255, 193, 7, 255)
-            )
-            outline.putalpha(edge)
-
-            preview.alpha_composite(
-                outline,
-                (px, py)
-            )
-
-    if not is_jigsaw:
-        x, y = get_grid_boundaries(width, height, m)
-        draw = ImageDraw.Draw(preview)
-        grid_color = (30, 30, 30, 255)
-
-        for xi in x:
-            draw.line(
-                (xi, 0, xi, height - 1),
-                fill=grid_color,
-                width=1
-            )
-
-        for yi in y:
-            draw.line(
-                (0, yi, width - 1, yi),
-                fill=grid_color,
-                width=1
-            )
-
-    return preview.convert("RGB")
+    return Image.fromarray(preview_array)
 
 
 # ==================================================
-# 8. DOWNLOAD ZIP
+# 6. MENGEMAS OUTPUT KE DALAM ZIP
 # ==================================================
-
-def create_zip(frame, pieces):
-    buffer = io.BytesIO()
-
-    with zipfile.ZipFile(
-        buffer,
-        "w",
-        zipfile.ZIP_DEFLATED
-    ) as zip_file:
-
+def create_zip(frame_image, pieces):
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         frame_buffer = io.BytesIO()
-        frame.save(frame_buffer, format="PNG")
-
-        zip_file.writestr(
-            "frame.png",
-            frame_buffer.getvalue()
-        )
+        frame_image.save(frame_buffer, format="PNG")
+        zip_file.writestr("frame.png", frame_buffer.getvalue())
 
         for item in pieces:
             piece_buffer = io.BytesIO()
+            item["image"].save(piece_buffer, format="PNG")
+            zip_file.writestr(f"pieces/{item['name']}", piece_buffer.getvalue())
 
-            item["image"].save(
-                piece_buffer,
-                format="PNG"
-            )
-
-            zip_file.writestr(
-                f"pieces/{item['name']}",
-                piece_buffer.getvalue()
-            )
-
-    return buffer.getvalue()
+    return zip_buffer.getvalue()

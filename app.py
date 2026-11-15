@@ -1,22 +1,17 @@
 import streamlit as st
-
 from processing import (
     load_image,
+    get_grid_boundaries,
     create_frame,
     create_pieces,
-    process_pieces,
     create_puzzle_preview,
     create_zip,
 )
-
 from solver import solve_puzzle
 
-import streamlit as st
-
 # ==================================================
-# KONFIGURASI
+# KONFIGURASI HALAMAN & TEMA
 # ==================================================
-
 st.set_page_config(
     page_title="Puzzle World — Generator & Solver",
     page_icon="🧩",
@@ -45,140 +40,121 @@ hr { border-color: #E8E0CF !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ==================================================
-# HEADER
-# ==================================================
-
 st.markdown("""
 <div class="hero">
     <h1>🧩 Puzzle World</h1>
-    <h3>Generator & Solver</h3>
-    <p>
-        Buat potongan teka-teki dari gambar Anda, atau susun kembali potongan menjadi gambar utuh.
-    </p>
+    <p>Sistem Pengolahan Citra Digital: Pemecah Citra (Generator) & Penyusun Citra Otomatis (Solver).</p>
 </div>
 """, unsafe_allow_html=True)
 
-tab_gen, tab_sol = st.tabs(["🧩 Puzzle Generator", "🔍 Puzzle Solver"])
+tab_generator, tab_solver = st.tabs(["🧩 Puzzle Generator", "🔍 Puzzle Solver"])
 
 # ==================================================
 # TAB 1: PUZZLE GENERATOR
 # ==================================================
-with tab_gen:
-    uploaded = st.file_uploader("Upload Image (Generator)", type=["jpg", "jpeg", "png"], help="Format JPG dan PNG.")
+with tab_generator:
+    uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"], help="Format JPG dan PNG.")
 
-    if uploaded is not None:
+    if uploaded_file is not None:
         try:
-            image = load_image(uploaded)
-            
-            left, middle, right = st.columns([1.05, 1.8, 1.05], gap="large")
+            original_image = load_image(uploaded_file)
 
-            with left:
+            left_col, middle_col, right_col = st.columns([1.05, 1.8, 1.05], gap="large")
+
+            with left_col:
                 with st.container(border=True):
-                    st.subheader("1. Grid Size")
-                    m = st.select_slider("Jumlah grid (M × M)", options=[3, 4, 5, 6, 7, 8, 9, 10], value=5)
-                    frame_count = m * m - (m - 2) ** 2
-                    piece_count = (m - 2) ** 2
-                    st.caption(f"Grid {m} × {m} · {frame_count} sel frame · {piece_count} pieces")
+                    st.subheader("Parameter Grid")
+                    grid_size = st.select_slider("Jumlah grid (M × M)", options=[4, 5, 6, 7, 8, 9, 10], value=4)
 
-                    st.divider()
-                    st.subheader("2. Puzzle Options")
-                    rotate = st.checkbox("Rotasi acak")
-                    augment = st.checkbox("Augmentasi gambar")
-                    jigsaw = st.checkbox("Pola jigsaw")
+                    total_cells = grid_size * grid_size
+                    piece_count = (grid_size - 2) ** 2
+                    frame_count = total_cells - piece_count
+                    x_points, y_points = get_grid_boundaries(original_image.width, original_image.height, grid_size)
 
-                    st.divider()
-                    st.subheader("3. Frame Style")
-                    st.markdown("**Image Edge Frame**")
-                    st.caption("Sel terluar mempertahankan gambar asli. Bagian tengah menjadi pieces.")
+                    st.markdown(f"""
+                    - **Dimensi Citra:** `{original_image.width} × {original_image.height}` px
+                    - **Total Grid:** `{grid_size} × {grid_size}` ({total_cells} sel)
+                    - **Sel Bingkai (Frame):** `{frame_count}` sel terluar
+                    - **Jumlah Potongan (N):** `{piece_count}` pieces
+                    - **Rata-rata Ukuran Sel:** `~{x_points[1]} × {y_points[1]}` px
+                    """)
 
-            if image.width < m or image.height < m:
+            if original_image.width < grid_size * 10 or original_image.height < grid_size * 10:
                 st.error("Resolusi gambar terlalu kecil untuk grid yang dipilih.")
             else:
-                with st.spinner("Memperbarui preview..."):
-                    frame = create_frame(image, m, jigsaw=jigsaw)
-                    pieces = create_pieces(image, m, jigsaw=jigsaw)
-                    pieces = process_pieces(pieces, rotate=rotate, augment=augment, jigsaw=jigsaw)
-                    preview = create_puzzle_preview(image, frame, pieces, m)
-                    zip_data = create_zip(frame, pieces)
+                frame_image = create_frame(original_image, grid_size)
+                pieces = create_pieces(original_image, grid_size)
+                preview_image = create_puzzle_preview(frame_image, pieces, grid_size)
+                zip_data = create_zip(frame_image, pieces)
 
-                with middle:
+                with middle_col:
                     with st.container(border=True):
-                        st.subheader("Puzzle Preview")
-                        preview_tab, original_tab = st.tabs(["🧩 Puzzle Preview", "🖼️ Original Image"])
+                        st.subheader("Visualisasi Hasil")
+                        tab_preview, tab_frame, tab_original = st.tabs(["🧩 Preview Grid", "🖼️ Bingkai (Frame)", "📷 Citra Asli"])
 
-                        with preview_tab:
-                            st.image(preview, use_container_width=True)
-                            st.caption("Mode jigsaw aktif." if jigsaw else "Mode kotak aktif.")
+                        with tab_preview:
+                            st.image(preview_image, use_container_width=True)
+                            st.caption("Visualisasi garis pembagian grid M × M pada citra utuh.")
 
-                        with original_tab:
-                            st.image(image, caption=f"Gambar asli · {image.width} × {image.height} px", use_container_width=True)
+                        with tab_frame:
+                            st.image(frame_image, use_container_width=True)
+                            st.caption("Output 1: Berkas citra bingkai (frame.png) sebagai acuan penyusunan.")
 
-                with right:
+                        with tab_original:
+                            st.image(original_image, use_container_width=True)
+                            st.caption(f"Citra masukan asli ({original_image.width} × {original_image.height} px).")
+
+                with right_col:
                     with st.container(border=True):
-                        st.subheader("Your Puzzle")
-                        st.image(image, use_container_width=True)
-                        st.markdown(f"**Grid {m} × {m}**")
-                        st.caption(f"{piece_count} pieces")
-                        st.caption("Jigsaw" if jigsaw else "Square Grid")
+                        st.subheader("Output Berkas")
+                        st.markdown(f"""
+                        **1. Citra Bingkai:** `frame.png`  
+                        **2. Citra Potongan:** `{piece_count} berkas` (`piece_001.png` s.d. `piece_{piece_count:03d}.png`)
+                        """)
                         st.divider()
                         st.download_button(
-                            "⬇ Download Puzzle (ZIP)",
+                            "⬇ Download Output (ZIP)",
                             data=zip_data,
-                            file_name="puzzle_world.zip",
+                            file_name="puzzle_generator_output.zip",
                             mime="application/zip",
                             type="primary",
                             use_container_width=True,
                         )
-                        st.caption("Berisi frame.png dan folder pieces/.")
 
                 st.divider()
-                st.subheader(f"Puzzle Pieces · {len(pieces)} potongan")
-                gallery_columns = st.columns(5)
+                st.subheader(f"Daftar Potongan Citra ({len(pieces)} Pieces)")
+
+                gallery_cols = st.columns(5)
                 for index, item in enumerate(pieces):
-                    with gallery_columns[index % 5]:
+                    with gallery_cols[index % 5]:
                         st.image(item["image"], caption=item["name"], use_container_width=True)
 
         except Exception as error:
-            st.error(f"Gagal memproses puzzle: {error}")
+            st.error(f"Gagal memproses gambar: {error}")
     else:
         st.info("Unggah gambar untuk mulai membuat puzzle.")
-
 
 # ==================================================
 # TAB 2: PUZZLE SOLVER
 # ==================================================
-with tab_sol:
-    st.markdown("### 🧩 Rekonstruksi Puzzle")
-    st.caption("Unggah file bingkai (`frame.png`) beserta seluruh potongan gambarnya untuk menyusun ulang gambar utuh.")
-    
-    col_upload1, col_upload2 = st.columns([1, 2])
-    
-    with col_upload1:
-        frame_file = st.file_uploader("1. Upload Frame", type=["png", "jpg", "jpeg"], key="frame_upload")
-    with col_upload2:
-        piece_files = st.file_uploader("2. Upload Pieces (Pilih semua file sekaligus)", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="pieces_upload")
+with tab_solver:
+    st.subheader("Penyusunan Otomatis (Edge Matching)")
+    st.caption("Unggah 1 berkas bingkai (frame.png) dan seluruh N berkas potongan untuk disusun kembali menjadi citra utuh.")
 
-    if frame_file and piece_files:
-        if st.button("🔍 Solve Puzzle", type="primary", use_container_width=True):
-            with st.spinner("Menerapkan algoritma pengolahan citra untuk menyusun puzzle..."):
+    upload_col1, upload_col2 = st.columns([1, 2])
+    with upload_col1:
+        frame_upload = st.file_uploader("1. Upload Bingkai (frame.png)", type=["png", "jpg", "jpeg"], key="solver_frame")
+    with upload_col2:
+        pieces_upload = st.file_uploader("2. Upload Potongan (Pilih semua file pieces sekaligus)", type=["png", "jpg", "jpeg"], accept_multiple_files=True, key="solver_pieces")
+
+    if frame_upload and pieces_upload:
+        if st.button("🔍 Susun Puzzle (Solve)", type="primary", use_container_width=True):
+            with st.spinner("Menghitung kecocokan piksel tepi (MSE)..."):
                 try:
-                    solved_image = solve_puzzle(frame_file, piece_files)
-                    
-                    st.success("Tugas 2 Selesai! Puzzle berhasil dirangkai menjadi citra utuh.")
-                    
-                    st.image(
-                        solved_image, 
-                        caption=f"Gambar Utuh Tersusun ({len(piece_files)} Potongan)", 
-                        use_container_width=True
-                    )
-                except Exception as e:
-                    st.error(f"Gagal menyusun puzzle. Pastikan jumlah potongan dan bingkai saling sesuai. Error: {e}")
+                    solved_image = solve_puzzle(frame_upload, pieces_upload)
+                    st.success("Puzzle berhasil disusun kembali menjadi citra utuh!")
+                    st.image(solved_image, caption=f"Hasil Rekonstruksi Citra ({len(pieces_upload)} potongan)", use_container_width=True)
+                except Exception as error:
+                    st.error(f"Gagal menyusun puzzle: {error}")
     else:
-        st.info("Silakan unggah 1 citra bingkai dan N citra potongan untuk melihat hasilnya.")
-
-# ==================================================
-# FOOTER
-# ==================================================
-st.divider()
-st.caption("Puzzle World · Pengolahan Citra Digital · Generator & Solver")
+        st.info("Silakan unggah 1 berkas bingkai dan N berkas potongan terlebih dahulu.")
